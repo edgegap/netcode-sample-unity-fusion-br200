@@ -1,0 +1,6 @@
+# Only the server build and the start script go into the image.
+*
+!Builds/EdgegapServer/**
+!edgegap/start-server.sh
+Builds/EdgegapServer/*_BurstDebugInformation_DoNotShip
+Builds/EdgegapServer/*_BackUpThisFolder_ButDontShipItWithYourGame
