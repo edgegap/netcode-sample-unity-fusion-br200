@@ -76,18 +76,21 @@ This runs the image on `127.0.0.1:7777/udp` with the same `ARBITRIUM_*` variable
 
 Start a deployment from the plugin, the dashboard or `POST /v2/deployments` ([`examples/deploy-request.json`](examples/deploy-request.json)). Pass the players' public IPs so Edgegap places the server near them. The deployment's FQDN, for example `0a1b2c3d4e5f.pr.edgegap.net`, is also the BR200 session and server name.
 
-The server's first log lines show the Photon region it chose:
+The server's first log lines show its public address, the connection mode and the Photon region it chose:
 
 ```
 [edgegap-br200] deployment=0a1b2c3d4e5f session=0a1b2c3d4e5f.pr.edgegap.net port=7777/udp public=203.0.113.10:31502
+[edgegap-br200] connection=direct -ip 203.0.113.10 -port 7777
 [edgegap-br200] photon_region=eu (nearest to Frankfurt (50.11, 8.68)) max_players=200 mode=default scene=default
 ```
 
 **Option A: Menu.** Open `TPSBR/Scenes/Menu`, play, choose the same region, and join the server from the list.
 
-**Option B: direct join.** Open the scene set as the Loader's **Batch Mode Scene**. In the **Standalone Manager**, set Game Mode `Client`, set Server Name and Session Name to the FQDN, and set Region to the server's region. Then play.
+**Option B: Standalone Manager auto-join.** Open the scene set as the Loader's **Batch Mode Scene**. In the **Standalone Manager**, set Game Mode `Client`, set Server Name and Session Name to the FQDN, and set Region to the server's region. Then play.
 
 BR200 starts a **120-second waiting timer when the server boots**. Players who join after it runs out count as eliminated. Deploy when the group is ready and connect clients as soon as the deployment is Ready.
+
+**Check the connection type.** In a connected client, press **Tab**. The overlay's top-left corner shows **CT** (Connection Type). It should say **Direct**. **Relay** means the client reaches the server through a Photon relay, which adds latency. See [Direct connection](#direct-connection).
 
 ## Runtime variables
 
@@ -107,12 +110,29 @@ Edgegap sets the `ARBITRIUM_*` variables. You set the `BR200_*` ones on the app 
 | `BR200_RECORD` | `false`. `true` writes session stats to `/data`. | `-recordSession -dataPath /data` |
 | `BR200_EXTRA_ARGS` | None. Other options, appended last. | |
 | `BR200_SELF_STOP` | `true`. Stop the deployment when BR200 exits. | |
+| `BR200_CONNECTION` | `direct`: pass the deployment's public IP. `relay`: bind `0.0.0.0` and let Photon relay every client. | `-ip` |
+| `BR200_DIRECT_PORT` | `bind`: pass the port the server binds to (7777). `public`: pass Edgegap's public port. | `-port` |
+| `BR200_PUBLIC_IP` | `ARBITRIUM_PUBLIC_IP` | `-ip` (direct) |
 
-The script always passes `-dedicatedServer -ip 0.0.0.0 -port <internal port>`. The port comes from `ARBITRIUM_PORT_GAMEPORT_INTERNAL` (7777). BR200 keeps the first copy of an option it sees, so `BR200_EXTRA_ARGS` can't override the options above. The script rejects that instead of ignoring it silently.
+The script always passes `-dedicatedServer`, `-ip` and `-port` (see [Direct connection](#direct-connection)). It reads the ports from `ARBITRIUM_PORTS_MAPPING`, the first UDP port whatever its name, so a port the plugin named `Game Port` works too. BR200 keeps the first copy of an option it sees, so `BR200_EXTRA_ARGS` can't override the options above. The script rejects that instead of ignoring it silently.
 
 ### How the Photon region is chosen
 
 Fusion servers and clients must be in the same Photon region. Edgegap places each deployment near its players, and `auto` puts the server in the Photon region closest to that deployment. That's usually the region the players' clients pick by ping. If your clients use a fixed region, or your Photon app only allows some regions, set `BR200_REGION` on the deployment, or restrict `auto` with `BR200_REGION_ALLOWLIST`. The Chinese mainland region (`cn`) is never picked automatically.
+
+### Direct connection
+
+Photon Fusion connects each client straight to the server (**Direct**) only when the server is given its public IP address and port. BR200 takes them from its `IP` and `Port` settings, the same settings as the Loader's `_batchModeConfiguration`, and from `-ip` / `-port` on the command line. Without them, every client is relayed through Photon. A relayed match works, but each packet takes an extra hop.
+
+By default the script passes the deployment's public IP (`ARBITRIUM_PUBLIC_IP`) and the port the server binds to (7777), as Photon recommends. Check the result with **Tab > CT** on a client:
+
+| CT shows | What to do |
+|---|---|
+| Direct | Nothing. |
+| Relay | Edgegap gives players a different public port, such as `31502`, than the port the server binds to. Try `BR200_DIRECT_PORT=public` on a test deployment. If the server then stops accepting players, go back to `bind` and keep relayed connections until BR200 can advertise a separate public port. |
+| The server doesn't start, or no client joins | BR200 may be trying to bind the public IP. Set `BR200_CONNECTION=relay` to get the previous behaviour back. |
+
+`scripts/run-local.sh` runs relayed by default, because a Docker Desktop container doesn't own a public IP. To try Direct on your network, set `BR200_CONNECTION=direct BR200_PUBLIC_IP=<your LAN IP>`.
 
 ### End of match
 
@@ -125,6 +145,7 @@ When BR200 exits, the script calls the deployment's own self-stop URL (`ARBITRIU
 | Console errors right after importing BR200 | *Allow 'unsafe' Code* is off. Check Project reports it, and Build Linux Server turns it on. |
 | Client gets `GameNotFound` | The App Version or Photon region differs between client and server. Compare with the server's `photon_region=` log line. |
 | Client gets `InvalidAuthentication` | Wrong or missing Fusion App ID in the build. |
+| Tab overlay shows CT **Relay** | The server didn't get a usable public address. See [Direct connection](#direct-connection). |
 | Server isn't in the Menu list | The client's region differs from the server's, or the 120-second waiting timer has already run out. |
 | Deployment exits at once with `error: ...` | A `BR200_*` value is invalid. The log line says which one. |
 | `ServerBuild: not found` in the logs | The image was built from a different folder. Rebuild to `Builds/EdgegapServer`, or pass `SERVER_BUILD_PATH`, and remove that folder from `.dockerignore`'s exclusions. |
@@ -140,13 +161,14 @@ bash tests/start-server.test.sh
 scripts/test-in-container.sh
 ```
 
-The first command runs the start-script tests against a stand-in server binary (41 checks). They cover option mapping, region choice, rejection of bad values, self-stop, token hygiene and signal forwarding. The second runs the same tests in `ubuntu:22.04`, the server's base image.
+The first command runs the start-script tests against a stand-in server binary (54 checks). They cover option mapping, Direct and relay addressing, port lookup, region choice, rejection of bad values, self-stop, token hygiene and signal forwarding. The second runs the same tests in `ubuntu:22.04`, the server's base image.
 
 ## Before a release
 
 - [ ] Build BR200 with **Build Linux Server** and record the BR200, Fusion and Unity versions here.
 - [ ] Two clients join a local container (`scripts/run-local.sh`).
-- [ ] Two clients join an Edgegap deployment with `BR200_REGION=auto`, through the Menu and through direct join.
+- [ ] Two clients join an Edgegap deployment with `BR200_REGION=auto`, through the Menu and through the Standalone Manager.
+- [ ] **Tab > CT** shows **Direct** on those clients. Record which `BR200_DIRECT_PORT` value gave it.
 - [ ] A match ends and the deployment stops on its own.
 - [ ] Size CPU and memory for a full match.
 

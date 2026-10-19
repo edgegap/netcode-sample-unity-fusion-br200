@@ -13,7 +13,10 @@ args=(-e "ARBITRIUM_REQUEST_ID=$id"
       -e "ARBITRIUM_PUBLIC_IP=127.0.0.1"
       -e 'ARBITRIUM_DEPLOYMENT_LOCATION={"city": "Amsterdam", "country": "Netherlands", "latitude": 52.37, "longitude": 4.9}')
 [[ -z "${1:-}" ]] || args+=(-e "BR200_REGION=$1")
-for v in BR200_MAX_PLAYERS BR200_MODE BR200_SCENE BR200_LOBBY BR200_FPS BR200_RECORD BR200_EXTRA_ARGS; do
+# Inside Docker Desktop the container can't own a public IP, so the local run is
+# relayed by default. BR200_CONNECTION=direct BR200_PUBLIC_IP=<your LAN IP> tries Direct.
+args+=(-e "BR200_CONNECTION=${BR200_CONNECTION:-relay}")
+for v in BR200_PUBLIC_IP BR200_DIRECT_PORT BR200_MAX_PLAYERS BR200_MODE BR200_SCENE BR200_LOBBY BR200_FPS BR200_RECORD BR200_EXTRA_ARGS; do
     [[ -z "${!v:-}" ]] || args+=(-e "$v=${!v}")
 done
 

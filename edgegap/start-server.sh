@@ -89,8 +89,39 @@ SESSION="${BR200_SESSION:-$FQDN}"
 [[ -n "$SESSION" ]] || die "no session name: run on Edgegap (ARBITRIUM_REQUEST_ID) or set BR200_SESSION"
 SERVER_NAME="${BR200_SERVER_NAME:-$SESSION}"
 
-PORT="${ARBITRIUM_PORT_GAMEPORT_INTERNAL:-${BR200_PORT:-7777}}"
-[[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1 && PORT <= 65535 )) || die "port must be 1-65535, got '$PORT'"
+# --- Address and port -------------------------------------------------------
+# Edgegap gives each deployment a public IP and maps a random public port to
+# the fixed port the server listens on (7777). ARBITRIUM_PORTS_MAPPING lists
+# both whatever the port is named; the first UDP entry is the game port.
+udp_entry="$(printf '%s' "${ARBITRIUM_PORTS_MAPPING:-}" | tr '}' '\n' \
+    | grep -i '"protocol"[[:space:]]*:[[:space:]]*"udp"' | head -n 1)"
+MAP_INTERNAL="$(json_number internal "$udp_entry")"
+MAP_EXTERNAL="$(json_number external "$udp_entry")"
+
+PORT="${ARBITRIUM_PORT_GAMEPORT_INTERNAL:-${MAP_INTERNAL:-${BR200_PORT:-7777}}}"
+PUBLIC_PORT="${ARBITRIUM_PORT_GAMEPORT_EXTERNAL:-${MAP_EXTERNAL:-$PORT}}"
+PUBLIC_IP="${BR200_PUBLIC_IP:-${ARBITRIUM_PUBLIC_IP:-}}"
+for p in "$PORT" "$PUBLIC_PORT"; do
+    [[ "$p" =~ ^[0-9]+$ ]] && (( p >= 1 && p <= 65535 )) || die "port must be 1-65535, got '$p'"
+done
+
+# Fusion connects clients straight to the server (Direct) only when the server
+# is given its public IP; without it, every client goes through a Photon relay.
+CONNECTION="${BR200_CONNECTION:-direct}"
+case "$CONNECTION" in
+    direct)
+        [[ -n "$PUBLIC_IP" ]] || die "BR200_CONNECTION=direct needs ARBITRIUM_PUBLIC_IP; set BR200_PUBLIC_IP, or BR200_CONNECTION=relay"
+        [[ "$PUBLIC_IP" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "public IP must be IPv4, got '$PUBLIC_IP'"
+        IP_ARG="$PUBLIC_IP"
+        case "${BR200_DIRECT_PORT:-bind}" in
+            bind) PORT_ARG="$PORT" ;;
+            public) PORT_ARG="$PUBLIC_PORT" ;;
+            *) die "BR200_DIRECT_PORT must be bind or public" ;;
+        esac ;;
+    relay)
+        IP_ARG=0.0.0.0 PORT_ARG="$PORT" ;;
+    *) die "BR200_CONNECTION must be direct or relay" ;;
+esac
 
 PLAYERS="${BR200_MAX_PLAYERS:-200}"
 [[ "$PLAYERS" =~ ^[0-9]+$ ]] && (( PLAYERS >= 1 && PLAYERS <= 200 )) || die "BR200_MAX_PLAYERS must be 1-200, got '$PLAYERS'"
@@ -99,7 +130,7 @@ REGION="" REGION_SOURCE="Fusion best-region ping"
 resolve_region
 
 args=(-batchmode -nographics -logFile - -dedicatedServer
-      -ip 0.0.0.0 -port "$PORT"
+      -ip "$IP_ARG" -port "$PORT_ARG"
       -sessionName "$SESSION" -serverName "$SERVER_NAME"
       -maxPlayers "$PLAYERS")
 [[ -z "$REGION" ]] || args+=(-region "$REGION")
@@ -135,7 +166,11 @@ fi
 [[ -x "$BINARY" ]] || die "server binary not found or not executable: $BINARY"
 
 # Never print the environment: ARBITRIUM_DELETE_TOKEN would end up in the logs.
-log "deployment=${REQUEST_ID:-local} session=$SESSION port=$PORT/udp public=${ARBITRIUM_PUBLIC_IP:-?}:${ARBITRIUM_PORT_GAMEPORT_EXTERNAL:-?}"
+log "deployment=${REQUEST_ID:-local} session=$SESSION port=$PORT/udp public=${PUBLIC_IP:-?}:$PUBLIC_PORT"
+log "connection=$CONNECTION -ip $IP_ARG -port $PORT_ARG"
+if [[ "$CONNECTION" == direct && "$PORT_ARG" != "$PUBLIC_PORT" ]]; then
+    log "note: players reach this server on public port $PUBLIC_PORT; if clients show CT Relay, see README 'Direct connection'"
+fi
 log "photon_region=${REGION:-best} ($REGION_SOURCE) max_players=$PLAYERS mode=${BR200_MODE:-default} scene=${BR200_SCENE:-default}"
 
 # --- Run, forward stop signals, stop the deployment when the match ends -----

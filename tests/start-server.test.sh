@@ -48,17 +48,36 @@ check() { # check <name> <condition...>
 }
 is() { [[ "$1" == "$2" ]] || { echo "     expected '$2', got '$1'"; return 1; }; }
 
-# Session, server name, bind address and port come from Edgegap.
+# Session, server name, address and port come from Edgegap.
 edgegap "$MONTREAL"
 check "session name is the deployment FQDN" is "$(arg_after -sessionName)" 0a1b2c3d4e5f.pr.edgegap.net
 check "server name defaults to the session name" is "$(arg_after -serverName)" 0a1b2c3d4e5f.pr.edgegap.net
-check "binds 0.0.0.0" is "$(arg_after -ip)" 0.0.0.0
-check "uses the internal game port" is "$(arg_after -port)" 7777
+check "direct: passes the public IP" is "$(arg_after -ip)" 203.0.113.10
+check "direct: passes the port the server binds to" is "$(arg_after -port)" 7777
 check "runs as a dedicated server" grep -qx -- -dedicatedServer "$TMP/args"
 check "logs to stdout" is "$(arg_after -logFile)" -
 check "200 players by default" is "$(arg_after -maxPlayers)" 200
 check "no scene unless asked (Loader's Batch Mode Scene applies)" bash -c "! grep -qx -- -scene '$TMP/args'"
 check "boot line shows the public address" grep -q "public=203.0.113.10:31502" "$TMP/out"
+check "boot line shows the connection mode" grep -q "connection=direct -ip 203.0.113.10 -port 7777" "$TMP/out"
+check "notes that the public port differs" grep -q "public port 31502" "$TMP/out"
+
+# Direct and relayed connections.
+edgegap "$MONTREAL" BR200_CONNECTION=relay
+check "relay: binds 0.0.0.0" is "$(arg_after -ip)" 0.0.0.0
+check "relay: internal port" is "$(arg_after -port)" 7777
+edgegap "$MONTREAL" BR200_DIRECT_PORT=public
+check "direct_port=public: passes the public port" is "$(arg_after -port)" 31502
+edgegap "$MONTREAL" BR200_PUBLIC_IP=198.51.100.7
+check "BR200_PUBLIC_IP overrides the injected IP" is "$(arg_after -ip)" 198.51.100.7
+MAPPING='{"ports": {"Game Port": {"name": "Game Port", "internal": 7777, "external": 30411, "protocol": "UDP", "tls_upgrade": false}, "web": {"name": "web", "internal": 8080, "external": 30999, "protocol": "TCP"}}}'
+run ARBITRIUM_REQUEST_ID=abc ARBITRIUM_DEPLOYMENT_LOCATION="$FRANKFURT" ARBITRIUM_PUBLIC_IP=203.0.113.10 \
+    ARBITRIUM_PORTS_MAPPING="$MAPPING" BR200_DIRECT_PORT=public
+check "ports mapping: finds the UDP port whatever its name" is "$(arg_after -port)" 30411
+check "ports mapping: public address in the boot line" grep -q "public=203.0.113.10:30411" "$TMP/out"
+run ARBITRIUM_REQUEST_ID=abc ARBITRIUM_DEPLOYMENT_LOCATION="$FRANKFURT" ARBITRIUM_PUBLIC_IP=203.0.113.10 \
+    ARBITRIUM_PORTS_MAPPING="$MAPPING"
+check "ports mapping: binds the internal port" is "$(arg_after -port)" 7777
 
 # Photon region follows the deployment location.
 edgegap "$MONTREAL";  check "Montreal -> cae" is "$(arg_after -region)" cae
@@ -85,15 +104,18 @@ check "extra args go last" is "$(tail -n 2 "$TMP/args" | tr '\n' ' ')" "-foo bar
 
 # Bad configuration fails before the server starts.
 for bad in "BR200_MAX_PLAYERS=0" "BR200_MAX_PLAYERS=201" "BR200_MODE=coop" "BR200_REGION=mars" \
-           "BR200_EXTRA_ARGS=-client" "BR200_EXTRA_ARGS=-port 9000" "BR200_REGION_ALLOWLIST=nowhere" "BR200_FPS=fast"; do
+           "BR200_EXTRA_ARGS=-client" "BR200_EXTRA_ARGS=-port 9000" "BR200_REGION_ALLOWLIST=nowhere" "BR200_FPS=fast" \
+           "BR200_CONNECTION=p2p" "BR200_DIRECT_PORT=random" "BR200_PUBLIC_IP=example.com"; do
     edgegap "$FRANKFURT" "$bad"
     check "rejects $bad" bash -c "[[ ! -e '$TMP/args' ]] && grep -q error '$TMP/out'"
 done
 run ARBITRIUM_DEPLOYMENT_LOCATION="$FRANKFURT"
 check "needs a session name outside Edgegap" grep -q "no session name" "$TMP/out"
-run BR200_SESSION=local-test
+run BR200_SESSION=local-test BR200_REGION=eu
+check "direct needs a public IP outside Edgegap" grep -q "needs ARBITRIUM_PUBLIC_IP" "$TMP/out"
+run BR200_SESSION=local-test BR200_CONNECTION=relay
 check "auto region needs a location outside Edgegap" grep -q "needs ARBITRIUM_DEPLOYMENT_LOCATION" "$TMP/out"
-run BR200_SESSION=local-test BR200_REGION=eu BR200_PORT=7000
+run BR200_SESSION=local-test BR200_REGION=eu BR200_PORT=7000 BR200_PUBLIC_IP=127.0.0.1
 check "runs locally with explicit values" is "$(arg_after -port)" 7000
 
 # Self-stop and signals.
@@ -110,7 +132,7 @@ check "exit code of the server is kept" grep -q "exited with code 3" "$TMP/out"
 
 rm -f "$TMP/args" "$TMP/curlreq"
 env -i PATH="$PATH" BR200_BINARY="$TMP/ServerBuild" BR200_CURL="$TMP/curl" FAKE_ARGS="$TMP/args" \
-    FAKE_CURL="$TMP/curlreq" FAKE_SLEEP=30 ARBITRIUM_REQUEST_ID=sig ARBITRIUM_DEPLOYMENT_LOCATION="$FRANKFURT" \
+    FAKE_CURL="$TMP/curlreq" FAKE_SLEEP=30 ARBITRIUM_REQUEST_ID=sig ARBITRIUM_DEPLOYMENT_LOCATION="$FRANKFURT" ARBITRIUM_PUBLIC_IP=203.0.113.10 \
     ARBITRIUM_DELETE_URL=https://x ARBITRIUM_DELETE_TOKEN=t bash "$SCRIPT" > "$TMP/out" 2>&1 &
 pid=$!
 for _ in $(seq 50); do [[ -s "$TMP/args" ]] && break; sleep 0.1; done
