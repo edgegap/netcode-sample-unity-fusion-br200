@@ -12,8 +12,8 @@ ARG SERVER_BUILD_PATH=Builds/EdgegapServer
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --uid 1001 --create-home --home-dir /home/br200 br200 \
- && mkdir -p /data && chown br200 /data
+ && useradd --system --uid 1001 --create-home --home-dir /home/server server \
+ && mkdir -p /data && chown server /data
 
 COPY ${SERVER_BUILD_PATH}/ /srv/br200/
 COPY edgegap/start-server.sh /usr/local/bin/start-server
@@ -22,8 +22,8 @@ COPY edgegap/start-server.sh /usr/local/bin/start-server
 RUN sed -i 's/\r$//' /usr/local/bin/start-server \
  && chmod 0755 /usr/local/bin/start-server /srv/br200/ServerBuild
 
-USER br200
-WORKDIR /home/br200
+USER server
+WORKDIR /home/server
 EXPOSE 7777/udp
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/start-server"]

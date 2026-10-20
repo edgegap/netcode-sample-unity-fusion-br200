@@ -36,7 +36,7 @@ run() { # run <env assignments...>: runs the script in a clean environment
         FAKE_ARGS="$TMP/args" FAKE_CURL="$TMP/curlreq" "$@" bash "$SCRIPT" > "$TMP/out" 2>&1
 }
 edgegap() { # an Edgegap deployment with the given location
-    run ARBITRIUM_REQUEST_ID=0a1b2c3d4e5f ARBITRIUM_DEPLOYMENT_LOCATION="$1" \
+    run ARBITRIUM_REQUEST_ID=f68e011bfb01 ARBITRIUM_DEPLOYMENT_LOCATION="$1" \
         ARBITRIUM_PORT_GAMEPORT_INTERNAL=7777 ARBITRIUM_PUBLIC_IP=203.0.113.10 \
         ARBITRIUM_PORT_GAMEPORT_EXTERNAL=31502 "${@:2}"
 }
@@ -50,8 +50,8 @@ is() { [[ "$1" == "$2" ]] || { echo "     expected '$2', got '$1'"; return 1; };
 
 # Session, server name, address and port come from Edgegap.
 edgegap "$MONTREAL"
-check "session name is the deployment FQDN" is "$(arg_after -sessionName)" 0a1b2c3d4e5f.pr.edgegap.net
-check "server name defaults to the session name" is "$(arg_after -serverName)" 0a1b2c3d4e5f.pr.edgegap.net
+check "session name is the deployment FQDN" is "$(arg_after -sessionName)" f68e011bfb01.pr.edgegap.net
+check "server name defaults to the session name" is "$(arg_after -serverName)" f68e011bfb01.pr.edgegap.net
 check "binds 0.0.0.0 (BR200's -ip is the bind address)" is "$(arg_after -ip)" 0.0.0.0
 check "binds the internal game port" is "$(arg_after -port)" 7777
 check "passes no public address (Fusion discovers it)" bash -c "! grep -qx -- -publicIP '$TMP/args'"
