@@ -18,7 +18,7 @@ namespace Edgegap.BR200.Editor
     public static class BR200ServerBuilder
     {
         const string DefaultOutput = "Builds/EdgegapServer/ServerBuild";
-        const string ScenesFolder = "/TPSBR/Scenes/";
+        static readonly string[] RequiredScenes = { "Loader", "Menu", "LoadingScene", "Game", "GameplayUI" };
 
         [MenuItem("Tools/Edgegap BR200/Check Project")]
         public static void CheckFromMenu()
@@ -68,7 +68,25 @@ namespace Edgegap.BR200.Editor
             if (!BuildPipeline.IsBuildTargetSupported(BuildTargetGroup.Standalone, BuildTarget.StandaloneLinux64))
                 problems.Add("Install the Linux Dedicated Server build support module in Unity Hub.");
 
-            // BR200 and Fusion use unsafe code; the import fails without it.
+            // BR200 ships with an IL2CPP server backend, and needs it: on a Mono server,
+            // Fusion RPCs such as Player.RPC_SendPlayerData throw MethodAccessException
+            // and players never get a character. Building Linux IL2CPP from Windows
+            // or macOS needs Unity's Linux toolchain package.
+            if (PlayerSettings.GetScriptingBackend(NamedBuildTarget.Server) != ScriptingImplementation.IL2CPP)
+            {
+                problems.Add("Set Project Settings > Player > Dedicated Server > Scripting Backend to IL2CPP. " +
+                             "BR200's RPCs fail on a Mono server (MethodAccessException).");
+            }
+            else if (Application.platform != RuntimePlatform.LinuxEditor
+                     && !File.ReadAllText("Packages/manifest.json").Contains("\"com.unity.toolchain."))
+            {
+                problems.Add("Building the IL2CPP server from this OS needs Unity's Linux toolchain. " +
+                             "Add the package com.unity.toolchain.win-x86_64-linux-x86_64 (Windows) or the macOS toolchain for Linux x86_64 " +
+                             "in Window > Package Manager > + > Add package by name.");
+            }
+
+            // BR200 and Fusion use unsafe code. BR200's Project Settings enable it,
+            // but the first import can compile before they apply; reopening fixes that.
             if (!PlayerSettings.allowUnsafeCode)
             {
                 if (fix)
@@ -82,15 +100,16 @@ namespace Edgegap.BR200.Editor
                 }
             }
 
-            var inBuild = new HashSet<string>(EditorBuildSettings.scenes.Where(s => s.enabled).Select(s => s.path));
-            string[] missing = AssetDatabase.FindAssets("t:Scene")
-                .Select(AssetDatabase.GUIDToAssetPath)
-                .Where(p => p.Contains(ScenesFolder) && !inBuild.Contains(p))
-                .ToArray();
-            if (inBuild.Count == 0)
-                problems.Add("The build profile has no enabled scenes. Add the TPSBR/Scenes scenes, Loader first.");
-            else if (missing.Length > 0)
-                problems.Add("Add every TPSBR/Scenes scene to the build profile. Missing:\n" + string.Join("\n", missing));
+            // BR200 loads these by name; its own build profile leaves Template out.
+            string[] enabled = EditorBuildSettings.scenes.Where(s => s.enabled).Select(s => s.path).ToArray();
+            var inBuild = new HashSet<string>(enabled.Select(Path.GetFileNameWithoutExtension));
+            string[] missing = RequiredScenes.Where(s => !inBuild.Contains(s)).ToArray();
+            if (enabled.Length == 0 || Path.GetFileNameWithoutExtension(enabled[0]) != "Loader")
+                problems.Add("TPSBR/Scenes/Loader must be the first enabled scene in the build profile.");
+            if (missing.Length > 0)
+                problems.Add("Add these TPSBR/Scenes scenes to the build profile: " + string.Join(", ", missing));
+            if (!inBuild.Any(s => s.StartsWith("GenArea")))
+                problems.Add("Add at least one map (TPSBR/Scenes/GenArea*) to the build profile.");
 
             string appId = ReadSetting("Fusion.Photon.Realtime.PhotonAppSettings", "Global", "AppSettings", "AppIdFusion");
             if (appId == null)
@@ -113,14 +132,25 @@ namespace Edgegap.BR200.Editor
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output)));
 
             // Build the Server subtarget (headless, UNITY_SERVER defined), not a
-            // plain Linux player, and check afterwards that Unity did.
-            BuildReport report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
+            // plain Linux player, and check afterwards that Unity did. Building it
+            // leaves the editor's standalone subtarget on Server, which would turn
+            // the next client build into a headless server, so put it back.
+            StandaloneBuildSubtarget previous = EditorUserBuildSettings.standaloneBuildSubtarget;
+            BuildReport report;
+            try
             {
-                scenes = scenes,
-                target = BuildTarget.StandaloneLinux64,
-                subtarget = (int)StandaloneBuildSubtarget.Server,
-                locationPathName = output,
-            });
+                report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
+                {
+                    scenes = scenes,
+                    target = BuildTarget.StandaloneLinux64,
+                    subtarget = (int)StandaloneBuildSubtarget.Server,
+                    locationPathName = output,
+                });
+            }
+            finally
+            {
+                EditorUserBuildSettings.standaloneBuildSubtarget = previous;
+            }
 
             var subtarget = report.summary.GetSubtarget<StandaloneBuildSubtarget>();
             bool ok = report.summary.result == BuildResult.Succeeded && subtarget == StandaloneBuildSubtarget.Server;
